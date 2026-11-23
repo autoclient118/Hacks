@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon Tag Arena</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;padding:28px 14px;color:#f4f7ff;background:radial-gradient(ellipse at top,#253c75,#12182f 55%,#0b1020);font:16px system-ui,sans-serif;text-align:center}
+h1{margin:0;font-size:clamp(30px,6vw,46px);letter-spacing:2px;text-shadow:0 0 18px #63d8ff88}
+.sub{margin:5px 0 22px;color:#b8c8eb}
+.game{width:min(96vw,850px);margin:auto;padding:18px;border:1px solid #86a8ff44;border-radius:22px;background:#17213dcc;box-shadow:0 16px 60px #0008}
+.names,.hud{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.names{justify-content:center;flex-wrap:wrap}
+.names label,.card{padding:10px 14px;border:1px solid #ffffff1c;border-radius:12px;background:#ffffff0c}
+.names input,.names select{padding:7px 9px;color:white;background:#0c1428;border:1px solid #718acb77;border-radius:7px;font:inherit}
+.names input{width:120px}
+canvas{display:block;width:100%;height:auto;border:2px solid #83a9ff88;border-radius:16px}
+button{margin:16px 0 8px;padding:12px 25px;color:#10172c;background:linear-gradient(135deg,#74f0c2,#69caff);border:0;border-radius:12px;font:bold 16px system-ui,sans-serif;cursor:pointer}
+#message{min-height:24px;color:#e2eaff}
+.controls{color:#aab9d9;font-size:14px;line-height:1.8}
+@media(max-width:560px){.game{padding:12px}.hud{flex-wrap:wrap;justify-content:center}.card{padding:8px 10px;font-size:13px}}
+</style>
+</head>
+<body>
+<h1>⚡ NEON TAG ⚡</h1>
+<p class="sub">Chase, dodge, and tag your friend—or challenge the bot!</p>
+
+<div class="game">
+  <div class="names">
+    <label>🎮 Mode:
+      <select id="mode">
+        <option value="2p">2 Players</option>
+        <option value="bot">Player vs. Bot</option>
+      </select>
+    </label>
+    <label>🟠 Player 1: <input id="name1" value="Player 1" maxlength="10"></label>
+    <label>🔵 <span id="player2Label">Player 2</span>:
+      <input id="name2" value="Player 2" maxlength="10">
+    </label>
+  </div>
+
+  <div class="hud">
+    <div class="card">🟠 <span id="scoreLabel1">Player 1</span> tags: <b id="score1">0</b></div>
+    <div class="card">⏱ Time: <b id="clock">60</b></div>
+    <div class="card">🔵 <span id="scoreLabel2">Player 2</span> tags: <b id="score2">0</b></div>
+  </div>
+
+  <canvas id="arena" width="800" height="460"></canvas>
+  <button id="start">▶ Start / Restart</button>
+  <div id="message">Press Start to play. Player 1 starts as It!</div>
+  <div class="controls" id="controls"></div>
+</div>
+
+<script>
+const $ = selector => document.querySelector(selector);
+const canvas = $("#arena");
+const ctx = canvas.getContext("2d");
+const mode = $("#mode");
+const name1 = $("#name1");
+const name2 = $("#name2");
+const message = $("#message");
+const clock = $("#clock");
+const score1 = $("#score1");
+const score2 = $("#score2");
+const scoreLabel1 = $("#scoreLabel1");
+const scoreLabel2 = $("#scoreLabel2");
+const player2Label = $("#player2Label");
+const controls = $("#controls");
+
+function playerName(i) {
+  const value = (i === 0 ? name1.value : name2.value).trim();
+  return value || `Player ${i + 1}`;
+}
+
+function updateLabels() {
+  scoreLabel1.textContent = playerName(0);
+  scoreLabel2.textContent = playerName(1);
+  player2Label.textContent = mode.value === "bot" ? "Bot" : "Player 2";
+  controls.textContent = mode.value === "bot"
+    ? "Player 1: WASD to move | Bot moves automatically"
+    : "Player 1: WASD to move | Player 2: Arrow keys to move";
+}
+
+name1.addEventListener("input", updateLabels);
+name2.addEventListener("input", updateLabels);
+mode.addEventListener("change", updateLabels);
+
+const players = [
+  {x:150,y:230,px:150,py:230,color:"#ff9f43",glow:"#ff8c42",keys:["a","d","w","s"],tags:0},
+  {x:650,y:230,px:650,py:230,color:"#55aaff",glow:"#3d8bff",keys:["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"],tags:0}
+];
+
+const keysDown = new Set();
+const radius = 20;
+let it = 0;
+let timeLeft = 60;
+let running = false;
+let last = 0;
+let tagWait = 0;
+let tagEffect = null;
+let winEffect = null;
+let botReaction = 0;
+let botDX = 0;
+let botDY = 0;
+let botStun = 0;
+
+document.addEventListener("keydown", event => {
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(event.key)) {
+    event.preventDefault();
+  }
+  keysDown.add(key);
+});
+
+document.addEventListener("keyup", event => {
+  keysDown.delete(event.key.length === 1 ? event.key.toLowerCase() : event.key);
+});
+
+function roundedRect(x,y,w,h,r,fill) {
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.roundRect(x,y,w,h,r);
+  ctx.fill();
+}
+
+function draw() {
+  const bg = ctx.createLinearGradient(0,0,800,460);
+  bg.addColorStop(0,"#182b4b");
+  bg.addColorStop(1,"#172e3a");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0,0,800,460);
+
+  // Neon arena markings
+  ctx.save();
+  ctx.strokeStyle = "#78f2d255";
+  ctx.lineWidth = 3;
+  ctx.shadowColor = "#55f2d0";
+  ctx.shadowBlur = 10;
+  ctx.strokeRect(16,16,768,428);
+  ctx.beginPath();
+  ctx.moveTo(400,16);
+  ctx.lineTo(400,444);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(400,230,65,0,Math.PI*2);
+  ctx.stroke();
+  ctx.restore();
+
+  players.forEach((p,i) => {
+    ctx.save();
+    ctx.shadowColor = p.glow;
+    ctx.shadowBlur = i === it ? 24 : 14;
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,radius,0,Math.PI*2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+    ctx.lineWidth = i === it ? 5 : 3;
+    ctx.strokeStyle = i === it ? "#fff4b0" : "#e6f4ff";
+    ctx.stroke();
+    ctx.restore();
+
+    const who = i === 1 && mode.value === "bot" ? "Bot" : playerName(i);
+    const label = i === it ? `${who} · IT!` : who;
+    ctx.font = "bold 13px system-ui";
+    ctx.textAlign = "center";
+    const width = ctx.measureText(label).width;
+    roundedRect(p.x-width/2-8,p.y-54,width+16,22,8,"#091326e8");
+    ctx.fillStyle = i === it ? "#ffe58a" : "#f4f7ff";
+    ctx.fillText(label,p.x,p.y-38);
+  });
+
+  if (tagEffect) {
+    const progress = 1 - tagEffect.life / 0.7;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0,tagEffect.life/0.7);
+    ctx.beginPath();
+    ctx.arc(tagEffect.x,tagEffect.y,20+progress*65,0,Math.PI*2);
+    ctx.strokeStyle = "#ffe66d";
+    ctx.lineWidth = 7;
+    ctx.shadowColor = "#ffda44";
+    ctx.shadowBlur = 18;
+    ctx.stroke();
+    ctx.fillStyle = "#fff2a8";
+    ctx.font = "bold 24px system-ui";
+    ctx.fillText("TAG!",tagEffect.x,tagEffect.y-48);
+    ctx.restore();
+  }
+
+  if (winEffect) {
+    winEffect.particles.forEach(p => {
+      ctx.globalAlpha = Math.max(0,p.life/2.5);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x,p.y,9,13);
+    });
+    ctx.globalAlpha = 1;
+    ctx.save();
+    ctx.shadowColor = "#65dbff";
+    ctx.shadowBlur = 18;
+    roundedRect(190,165,420,76,16,"#0b1429ee");
+    ctx.restore();
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 27px system-ui";
+    ctx.fillText(winEffect.text,400,211);
+  }
+}
+
+function chooseBotDirection() {
+  const bot = players[1];
+  const human = players[0];
+  const toX = human.x - bot.x;
+  const toY = human.y - bot.y;
+  const distance = Math.hypot(toX,toY) || 1;
+  let dx,dy;
+
+  if (it === 1) {
+    // Bot is It: lead the player's movement slightly.
+    const lead = Math.min(0.45,distance/500);
+    const playerVX = human.x - human.px;
+    const playerVY = human.y - human.py;
+    dx = human.x + playerVX*lead - bot.x;
+    dy = human.y + playerVY*lead - bot.y;
+  } else {
+    // Player is It: run away with a changing sidestep.
+    const side = (Math.random()<0.5 ? -1 : 1) * (0.2+Math.random()*0.45);
+    dx = -(toX/distance) - (toY/distance)*side;
+    dy = -(toY/distance) + (toX/distance)*side;
+  }
+
+  // Steer away from the arena edges.
+  if (bot.x < 80) dx += 0.8;
+  if (bot.x > 720) dx -= 0.8;
+  if (bot.y < 80) dy += 0.8;
+  if (bot.y > 380) dy -= 0.8;
+
+  const length = Math.hypot(dx,dy) || 1;
+  botDX = dx/length;
+  botDY = dy/length;
+}
+
+function update(dt) {
+  if (tagEffect && (tagEffect.life -= dt) <= 0) tagEffect = null;
+
+  if (winEffect) {
+    winEffect.particles.forEach(p => {
+      p.x += p.vx*dt;
+      p.y += p.vy*dt;
+      p.vy += 180*dt;
+      p.life -= dt;
+    });
+    winEffect.particles = winEffect.particles.filter(p => p.life > 0);
+  }
+
+  if (!running) return;
+
+  timeLeft -= dt;
+  tagWait = Math.max(0,tagWait-dt);
+  clock.textContent = Math.ceil(Math.max(0,timeLeft));
+
+  players.forEach((p,i) => {
+    p.px = p.x;
+    p.py = p.y;
+    let dx = 0;
+    let dy = 0;
+
+    if (i === 1 && mode.value === "bot") {
+      if (botStun > 0) {
+        // Keep the bot stationary for the rest of its stun.
+        botStun = Math.max(0,botStun-dt);
+        dx = 0;
+        dy = 0;
+      } else {
+        botReaction -= dt;
+        if (botReaction <= 0) {
+          chooseBotDirection();
+          botReaction = 0.12 + Math.random()*0.12;
+        }
+        dx = botDX;
+        dy = botDY;
+      }
+    } else {
+      dx = Number(keysDown.has(p.keys[1])) - Number(keysDown.has(p.keys[0]));
+      dy = Number(keysDown.has(p.keys[3])) - Number(keysDown.has(p.keys[2]));
+    }
+
+    const length = Math.hypot(dx,dy) || 1;
+    const speed = 220;
+    p.x += dx/length*speed*dt;
+    p.y += dy/length*speed*dt;
+    p.x = Math.max(radius+16,Math.min(784-radius,p.x));
+    p.y = Math.max(radius+16,Math.min(444-radius,p.y));
+  });
+
+  const distance = Math.hypot(
+    players[0].x-players[1].x,
+    players[0].y-players[1].y
+  );
+
+  if (distance < radius*2 && tagWait === 0) {
+    // If Player 1 was It, Player 1 just tagged the bot.
+    if (mode.value === "bot" && it === 0) {
+      botStun = 2;
+    }
+
+    players[it].tags++;
+    score1.textContent = players[0].tags;
+    score2.textContent = players[1].tags;
+    tagEffect = {
+      x:(players[0].x+players[1].x)/2,
+      y:(players[0].y+players[1].y)/2,
+      life:0.7
+    };
+
+    it = 1-it;
+    tagWait = 1;
+    botReaction = 0;
+    message.textContent = `Tag! ${it===1 && mode.value==="bot" ? "Bot" : playerName(it)} is It!`;
+  }
+
+  if (timeLeft <= 0) {
+    timeLeft = 0;
+    running = false;
+    clock.textContent = "0";
+
+    let result;
+    if (players[0].tags === players[1].tags) {
+      result = "It's a tie!";
+    } else {
+      const winner = players[0].tags > players[1].tags ? 0 : 1;
+      const winnerName = winner===1 && mode.value==="bot" ? "Bot" : playerName(winner);
+      result = `${winnerName} wins!`;
+    }
+
+    message.textContent = `Time's up! ${result}`;
+
+    if (result !== "It's a tie!") {
+      const colors = ["#ffe66d","#ff6b9a","#61d6a5","#55aaff","#c084fc"];
+      winEffect = {
+        text:result,
+        particles:Array.from({length:100},() => ({
+          x:100+Math.random()*600,
+          y:-20-Math.random()*380,
+          vx:(Math.random()-0.5)*110,
+          vy:40+Math.random()*100,
+          life:2.5,
+          color:colors[Math.floor(Math.random()*colors.length)]
+        }))
+      };
+    }
+  }
+}
+
+function loop(now) {
+  const dt = Math.min((now-last)/1000 || 0,0.04);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+$("#start").addEventListener("click",() => {
+  players[0].x=150; players[0].y=230; players[0].px=150; players[0].py=230; players[0].tags=0;
+  players[1].x=650; players[1].y=230; players[1].px=650; players[1].py=230; players[1].tags=0;
+  it=0;
+  timeLeft=60;
+  tagWait=0;
+  tagEffect=null;
+  winEffect=null;
+  botReaction=0;
+  botDX=0;
+  botDY=0;
+  botStun=0;
+  running=true;
+  score1.textContent="0";
+  score2.textContent="0";
+  clock.textContent="60";
+  updateLabels();
+  message.textContent=`Go! ${playerName(0)} is It!`;
+});
+
+updateLabels();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
