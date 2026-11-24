@@ -1,0 +1,1 @@
+/give @p potion 1 0 {CustomPotionEffects:[{Id:5b,Amplifier:5b,Duration:2147483647},{Id:21b,Amplifier:9b,Duration:2147483647},{Id:22b,Amplifier:9b,Duration:2147483647},{Id:11b,Amplifier:54b,Duration:2147483647},{Id:12b,Amplifier:0b,Duration:2147483647}],display:{Name:"OP Potion"}}
